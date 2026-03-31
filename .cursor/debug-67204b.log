@@ -1,2 +1,0 @@
-{"sessionId": "67204b", "hypothesisId": "H1", "location": "reconcile_sap_cbs.py:after_build_sap_key", "message": "SAP key check", "data": {"amount": 10900.0, "in_key_贷": false, "in_key_借": false, "key_size": 1391}, "timestamp": 1772503160439}
-{"sessionId": "67204b", "hypothesisId": "H1", "location": "reconcile_sap_cbs.py:after_build_sap_key", "message": "SAP key check", "data": {"amount": 2261640.0, "in_key_贷": false, "in_key_借": false, "key_size": 1391}, "timestamp": 1772503160440}

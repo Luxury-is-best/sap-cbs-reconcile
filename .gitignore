@@ -1,2 +1,10 @@
 # 本地原始 Excel 等样例数据，不上传到 GitHub
 原始文件/
+
+# Python 字节码缓存（本地自动生成，勿提交）
+__pycache__/
+*.py[cod]
+
+# 编辑器 / 系统
+.DS_Store
+.cursor/
