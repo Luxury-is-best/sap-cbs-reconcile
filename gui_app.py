@@ -8,6 +8,8 @@ SAP 与 CBS 桌面对账工具（双模式）：
 
 from __future__ import annotations
 
+__version__ = "1.0.0"
+
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -31,7 +33,7 @@ TOTAL_MODE = "总和对账"
 class ReconcileGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("SAP和CBS对账助手")
+        self.title(f"SAP和CBS对账助手 v{__version__}")
         self.geometry("760x560")
         self.minsize(700, 520)
 
