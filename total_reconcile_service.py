@@ -312,3 +312,19 @@ def run_total_reconcile_from_bytes(
 
 def write_total_report(report_text: str, report_path: str | Path) -> None:
     Path(report_path).write_text(report_text, encoding="utf-8")
+
+
+def write_combined_reconcile_excel(
+    detail_df: pd.DataFrame,
+    total_sheets: dict[str, pd.DataFrame],
+    output_path: str | Path,
+) -> Path:
+    """明细对账结果与总和对账结果写入同一工作簿（多 sheet）。"""
+    out = Path(output_path).resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        detail_df.to_excel(writer, index=False, sheet_name="明细对账")
+        for name, df in total_sheets.items():
+            sheet = (name or "Sheet")[:31]
+            df.to_excel(writer, index=False, sheet_name=sheet)
+    return out

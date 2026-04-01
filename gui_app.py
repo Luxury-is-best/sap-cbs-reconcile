@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SAP 与 CBS 桌面对账工具（双模式）：
-1) 明细对账（CBS明细 + SAP明细）
-2) 总和对账（CBS历史余额 + SAP科余 + 银行科目）
+SAP 与 CBS 桌面对账工具：
+一次上传全部输入文件，同时执行明细对账与总和对账；
+结果输出为单个 Excel（多 sheet：明细对账 + 总和各表）及合并文本报告。
 """
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import traceback
 from datetime import datetime
@@ -21,54 +21,58 @@ from backend_reconcile_sap_cbs import (
     load_sap_detail,
     reconcile,
     report_as_string,
-    write_report,
 )
-from total_reconcile_service import run_total_reconcile, write_total_report
+from total_reconcile_service import run_total_reconcile, write_combined_reconcile_excel
 
 
-DETAIL_MODE = "明细对账"
-TOTAL_MODE = "总和对账"
+# 固定顺序：明细 2 个 + 总和 3 个（共 5 个文件）
+FILE_ROWS: list[tuple[str, str]] = [
+    ("CBS 明细", "detail_cbs"),
+    ("SAP 明细", "detail_sap"),
+    ("CBS 历史余额", "total_cbs"),
+    ("SAP 科余", "total_sap"),
+    ("银行科目", "total_bank"),
+]
 
 
 class ReconcileGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"SAP和CBS对账助手 v{__version__}")
-        self.geometry("760x560")
-        self.minsize(700, 520)
+        self.geometry("760x620")
+        self.minsize(700, 560)
 
-        self.mode_var = tk.StringVar(value=DETAIL_MODE)
-        self.status_var = tk.StringVar(value="请选择模式并上传文件。")
+        self.status_var = tk.StringVar(value="请按顺序选择全部输入文件后点击开始对账。")
         self.output_dir_var = tk.StringVar(value=str(Path.cwd()))
 
-        self.file_vars = {
-            "detail_cbs": tk.StringVar(),
-            "detail_sap": tk.StringVar(),
-            "total_cbs": tk.StringVar(),
-            "total_sap": tk.StringVar(),
-            "total_bank": tk.StringVar(),
-        }
+        self.file_vars = {key: tk.StringVar() for _, key in FILE_ROWS}
 
         self._build_layout()
-        self._refresh_mode_view()
 
     def _build_layout(self) -> None:
         root = ttk.Frame(self, padding=12)
         root.pack(fill="both", expand=True)
 
-        mode_box = ttk.LabelFrame(root, text="1) 选择对账模式", padding=10)
-        mode_box.pack(fill="x", pady=(0, 10))
-        ttk.Radiobutton(mode_box, text=DETAIL_MODE, variable=self.mode_var, value=DETAIL_MODE, command=self._refresh_mode_view).grid(
-            row=0, column=0, sticky="w", padx=(0, 20)
-        )
-        ttk.Radiobutton(mode_box, text=TOTAL_MODE, variable=self.mode_var, value=TOTAL_MODE, command=self._refresh_mode_view).grid(
-            row=0, column=1, sticky="w"
-        )
+        files_box = ttk.LabelFrame(root, text="1) 上传全部输入文件（按下列顺序，共 5 个）", padding=10)
+        files_box.pack(fill="x", pady=(0, 10))
+        for row, (title, key) in enumerate(FILE_ROWS):
+            ttk.Label(files_box, text=title, width=18).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Entry(files_box, textvariable=self.file_vars[key]).grid(
+                row=row, column=1, sticky="ew", pady=4, padx=6
+            )
+            ttk.Button(files_box, text="选择文件", command=lambda k=key: self._pick_file(k)).grid(
+                row=row, column=2, sticky="e", pady=4
+            )
+        files_box.columnconfigure(1, weight=1)
 
-        self.files_box = ttk.LabelFrame(root, text="2) 选择输入文件", padding=10)
-        self.files_box.pack(fill="x", pady=(0, 10))
+        bulk_row = len(FILE_ROWS)
+        ttk.Button(
+            files_box,
+            text="一次性多选文件（按上表顺序依次点选 5 个）",
+            command=self._pick_all_in_order,
+        ).grid(row=bulk_row, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
-        out_box = ttk.LabelFrame(root, text="3) 选择输出目录", padding=10)
+        out_box = ttk.LabelFrame(root, text="2) 选择输出目录", padding=10)
         out_box.pack(fill="x", pady=(0, 10))
         ttk.Entry(out_box, textvariable=self.output_dir_var).grid(row=0, column=0, sticky="ew", padx=(0, 8))
         ttk.Button(out_box, text="浏览", command=self._pick_output_dir).grid(row=0, column=1, sticky="e")
@@ -85,27 +89,11 @@ class ReconcileGui(tk.Tk):
 
         tips = (
             "说明：\n"
-            " - 明细对账：上传 CBS 明细 + SAP 明细；输出明细结果和对账报告。\n"
-            " - 总和对账：上传 CBS 历史余额 + SAP 科余 + 银行科目；输出总和结果和对账报告。"
+            " - 程序会同时跑「明细对账」与「总和对账」。\n"
+            " - 输出一个 Excel：工作表「明细对账」+ 总和结果的「CBS汇总」「SAP汇总」「总览」。\n"
+            " - 另有一份合并的文本报告（明细报告 + 总和报告）。"
         )
         ttk.Label(status_box, text=tips, justify="left").pack(anchor="w", pady=(10, 0))
-
-    def _render_row(self, parent: ttk.LabelFrame, row: int, title: str, key: str) -> None:
-        ttk.Label(parent, text=title, width=18).grid(row=row, column=0, sticky="w", pady=4)
-        ttk.Entry(parent, textvariable=self.file_vars[key]).grid(row=row, column=1, sticky="ew", pady=4, padx=6)
-        ttk.Button(parent, text="选择文件", command=lambda: self._pick_file(key)).grid(row=row, column=2, sticky="e", pady=4)
-        parent.columnconfigure(1, weight=1)
-
-    def _refresh_mode_view(self) -> None:
-        for w in self.files_box.winfo_children():
-            w.destroy()
-        if self.mode_var.get() == DETAIL_MODE:
-            self._render_row(self.files_box, 0, "CBS 明细文件", "detail_cbs")
-            self._render_row(self.files_box, 1, "SAP 明细文件", "detail_sap")
-        else:
-            self._render_row(self.files_box, 0, "CBS 历史余额", "total_cbs")
-            self._render_row(self.files_box, 1, "SAP 科余", "total_sap")
-            self._render_row(self.files_box, 2, "银行科目", "total_bank")
 
     def _pick_file(self, key: str) -> None:
         path = filedialog.askopenfilename(
@@ -115,19 +103,34 @@ class ReconcileGui(tk.Tk):
         if path:
             self.file_vars[key].set(path)
 
+    def _pick_all_in_order(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="按顺序选择 5 个文件：CBS明细 → SAP明细 → CBS历史余额 → SAP科余 → 银行科目",
+            filetypes=[("Excel 文件", "*.xlsx *.xls"), ("所有文件", "*.*")],
+        )
+        if not paths:
+            return
+        if len(paths) != len(FILE_ROWS):
+            messagebox.showwarning(
+                "数量不对",
+                f"需要恰好选择 {len(FILE_ROWS)} 个文件，当前选了 {len(paths)} 个。\n"
+                "请按住 Ctrl/Cmd 按顺序多选，或逐个用「选择文件」指定。",
+            )
+            return
+        for (_, key), p in zip(FILE_ROWS, paths):
+            self.file_vars[key].set(p)
+
     def _pick_output_dir(self) -> None:
         path = filedialog.askdirectory(title="选择输出目录")
         if path:
             self.output_dir_var.set(path)
 
     def _validate_files(self) -> list[Path]:
-        mode = self.mode_var.get()
-        required_keys = ["detail_cbs", "detail_sap"] if mode == DETAIL_MODE else ["total_cbs", "total_sap", "total_bank"]
         paths: list[Path] = []
-        for key in required_keys:
+        for _, key in FILE_ROWS:
             raw = self.file_vars[key].get().strip()
             if not raw:
-                raise ValueError("请先选择所有必需的输入文件。")
+                raise ValueError("请先为每一行选择输入文件（共 5 个）。")
             p = Path(raw).expanduser().resolve()
             if not p.exists():
                 raise ValueError(f"文件不存在：{p}")
@@ -145,43 +148,45 @@ class ReconcileGui(tk.Tk):
             messagebox.showerror("参数错误", str(e))
             return
 
-        mode = self.mode_var.get()
         now = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.status_var.set("正在对账，请稍候...")
         self.update_idletasks()
 
-        try:
-            if mode == DETAIL_MODE:
-                cbs_df = load_cbs_detail(str(files[0]))
-                sap_df = load_sap_detail(str(files[1]))
-                result_df = reconcile(cbs_df, sap_df)
+        excel_path = out_dir / f"SAP_CBS_对账结果_{now}.xlsx"
+        report_path = out_dir / f"对账报告_合并_{now}.txt"
 
-                excel_path = out_dir / f"CBS明细_对账结果_{now}.xlsx"
-                report_path = out_dir / f"对账报告_明细_{now}.txt"
-                result_df.to_excel(excel_path, index=False)
-                write_report(result_df, str(report_path))
-                report_text = report_as_string(result_df)
-            else:
-                excel_path = out_dir / f"对账差额结果3.0_{now}.xlsx"
-                report_path = out_dir / f"总和对账报告_{now}.txt"
-                result = run_total_reconcile(
-                    cbs_balance_path=files[0],
-                    sap_balance_path=files[1],
-                    bank_subject_path=files[2],
-                    output_excel_path=excel_path,
-                )
-                report_text = str(result["report"])
-                write_total_report(report_text, report_path)
+        try:
+            cbs_detail = load_cbs_detail(str(files[0]))
+            sap_detail = load_sap_detail(str(files[1]))
+            result_df = reconcile(cbs_detail, sap_detail)
+
+            total_result = run_total_reconcile(
+                cbs_balance_path=files[2],
+                sap_balance_path=files[3],
+                bank_subject_path=files[4],
+                output_excel_path=None,
+            )
+            total_sheets = total_result["sheets"]
+            assert isinstance(total_sheets, dict)
+
+            write_combined_reconcile_excel(result_df, total_sheets, excel_path)
+
+            detail_report = report_as_string(result_df)
+            total_report = str(total_result["report"])
+            combined_report = (
+                "========== 明细对账报告 ==========\n" + detail_report.strip() + "\n\n\n" + total_report.strip() + "\n"
+            )
+            Path(report_path).write_text(combined_report, encoding="utf-8")
 
             msg = (
                 f"对账完成。\n\n"
-                f"模式：{mode}\n"
-                f"结果文件：{excel_path}\n"
-                f"报告文件：{report_path}\n\n"
-                f"报告预览：\n{report_text}"
+                f"结果 Excel（多 sheet）：{excel_path}\n"
+                f"合并报告：{report_path}\n\n"
+                f"报告预览：\n{combined_report[:3500]}"
+                + ("…" if len(combined_report) > 3500 else "")
             )
             self.status_var.set(msg)
-            messagebox.showinfo("完成", "对账已完成，结果与报告已输出。")
+            messagebox.showinfo("完成", "对账已完成：已生成合并 Excel 与报告。")
         except Exception as e:
             self.status_var.set("执行失败，请检查文件内容与列名。")
             detail = f"{e}\n\n{traceback.format_exc(limit=2)}"
