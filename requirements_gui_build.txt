@@ -1,0 +1,4 @@
+# 仅在 Windows 上打包 GUI 时使用（不含 Flask，体积更小）
+pandas>=2.0.0
+openpyxl>=3.1.0
+pyinstaller>=6.0.0
